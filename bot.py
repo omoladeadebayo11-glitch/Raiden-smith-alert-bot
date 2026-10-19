@@ -155,31 +155,33 @@ def send(text):
     return False
 
 
+CHAIN_NAMES = {"bsc": "BNB Chain", "ethereum": "Ethereum", "solana": "Solana", "base": "Base",
+               "arbitrum": "Arbitrum", "polygon": "Polygon", "avalanche": "Avalanche",
+               "optimism": "Optimism", "sui": "Sui", "ton": "TON", "tron": "Tron"}
+
+
 def build_message(info, tags):
     e = html.escape
-    sym = f" (${e(info['symbol'])})" if info["symbol"] else ""
-    lines = [f"<b>{' + '.join(tags)}</b>", f"<b>{e(info['name'] or info['address'][:8])}</b>{sym}"]
-    bits = [f"Chain: {e(info['chain'])}"]
+    chain = CHAIN_NAMES.get(info["chain"].lower(), info["chain"].replace("-", " ").title())
+    name = e(info["name"] or info["address"][:8])
+    sym = f" · ${e(info['symbol'])}" if info["symbol"] else ""
+
+    top = "  ".join(f"<b>{t}</b>" for t in tags)
+    meta = f"⛓ {e(chain)}"
     if age_text(info["age_h"]):
-        bits.append(f"Age: {age_text(info['age_h'])}")
-    lines.append(" | ".join(bits))
-    stats = []
-    if info["price"]:
-        stats.append(f"Price: ${e(str(info['price']))}")
-    for label, val in (("MCap", info["mcap"]), ("Liq", info["liq"]), ("Vol24h", info["vol24"])):
+        meta += f"   ⏱ {age_text(info['age_h'])} old"
+
+    lines = [top, "", f"<b>{name}</b>{sym}", meta, ""]
+    for icon, label, val in (("💰", "MCap", info["mcap"]), ("💧", "Liquidity", info["liq"]),
+                             ("📊", "Volume 24h", info["vol24"])):
         if money(val):
-            stats.append(f"{label}: {money(val)}")
-    if stats:
-        lines.append(" | ".join(stats))
-    lines.append(f"CA: <code>{e(info['address'])}</code>")
-    links = [f'<a href="{e(info["tg"])}">Telegram</a>']
-    if info["x"]:
-        links.append(f'<a href="{e(info["x"])}">X</a>')
-    if info["site"]:
-        links.append(f'<a href="{e(info["site"])}">Website</a>')
-    links.append(f'<a href="{e(info["url"])}">DexScreener</a>')
-    lines.append(" | ".join(links))
-    lines.append("<i>Not financial advice. DYOR. 'Boosted' means paid promotion, not organic trending.</i>")
+            lines.append(f"{icon} {label}: <b>{money(val)}</b>")
+    lines += ["", "📋 <b>Contract</b>", f"<code>{e(info['address'])}</code>", "",
+              f'💬 <a href="{e(info["tg"])}">Join Telegram group</a>', ""]
+    note = "⚠️ DYOR · Not financial advice"
+    if TREND_TAG in tags:
+        note += " · Boosted = paid promotion"
+    lines.append(f"<i>{note}</i>")
     return "\n".join(lines)
 
 
