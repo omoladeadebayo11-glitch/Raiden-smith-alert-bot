@@ -212,7 +212,12 @@ def send(text):
     payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML",
                "disable_web_page_preview": True}
     for _ in range(3):
-        r = requests.post(url, json=payload, timeout=20)
+        try:
+            r = requests.post(url, json=payload, timeout=20)
+        except requests.RequestException as exc:
+            log.warning("Telegram request failed: %s", exc)
+            time.sleep(3)
+            continue
         if r.status_code == 429:
             time.sleep(r.json().get("parameters", {}).get("retry_after", 5) + 1)
             continue
@@ -360,7 +365,10 @@ def run_once(state):
 
 def main():
     state = load_state() or {"coins": {}, "initialized": False}
-    run_once(state)
+    try:
+        run_once(state)
+    except Exception:
+        log.exception("run failed")  # still save what was already posted, so nothing is reposted
     save_state(state)
 
 
