@@ -77,6 +77,17 @@
    "symbol": "",
    "tg": null
   },
+  "robinhood:0xa01fF10774CFe53C3FBC1D7D124c42e19F6AfcBD": {
+   "address": "0xa01fF10774CFe53C3FBC1D7D124c42e19F6AfcBD",
+   "chain": "robinhood",
+   "first_seen": 1792416176.798192,
+   "last_checked": 1792416176.798192,
+   "last_trending": 1792416176.798192,
+   "name": "OWO",
+   "posted_new": 1,
+   "symbol": "OWOWO",
+   "tg": "https://t.me/OWOWOCAT"
+  },
   "solana:2rLuDEBwuXM6cBAQnK2bjFYXfsUozYwXsFSmA3Eupump": {
    "address": "2rLuDEBwuXM6cBAQnK2bjFYXfsUozYwXsFSmA3Eupump",
    "chain": "solana",
@@ -110,6 +121,17 @@
    "symbol": "",
    "tg": null
   },
+  "solana:32nVEFBt3oTfoM9K3qU7FWfLoH9gibNPasibJvoGpump": {
+   "address": "32nVEFBt3oTfoM9K3qU7FWfLoH9gibNPasibJvoGpump",
+   "chain": "solana",
+   "first_seen": 1792416176.798192,
+   "last_checked": 1792416176.798192,
+   "last_trending": 0,
+   "name": "Borly ",
+   "posted_new": 0,
+   "symbol": "BORLY",
+   "tg": null
+  },
   "solana:3zh9fAUC25SLVSKJJ6Qs7nkiky3nq1nHBdcuSAcxpump": {
    "address": "3zh9fAUC25SLVSKJJ6Qs7nkiky3nq1nHBdcuSAcxpump",
    "chain": "solana",
@@ -131,6 +153,17 @@
    "posted_new": 1,
    "symbol": "",
    "tg": null
+  },
+  "solana:4qH8A5GxvRMZgpRFjXASc6U9HAoEzKeUqxY2dPB7pump": {
+   "address": "4qH8A5GxvRMZgpRFjXASc6U9HAoEzKeUqxY2dPB7pump",
+   "chain": "solana",
+   "first_seen": 1792416176.798192,
+   "last_checked": 1792416176.798192,
+   "last_trending": 1792416176.798192,
+   "name": "Grok Mascot",
+   "posted_new": 1,
+   "symbol": "Groklet",
+   "tg": "https://t.me/grokletfanclub"
   },
   "solana:5HxgBCs8RDmU3Y4t51XvBJ346YaNwjRNiS54vRQpump": {
    "address": "5HxgBCs8RDmU3Y4t51XvBJ346YaNwjRNiS54vRQpump",
@@ -163,6 +196,17 @@
    "name": "",
    "posted_new": 1,
    "symbol": "",
+   "tg": null
+  },
+  "solana:6mERUiPfyjPQZBTMpProJR7w8i6jKqMo1trCepmkxn35": {
+   "address": "6mERUiPfyjPQZBTMpProJR7w8i6jKqMo1trCepmkxn35",
+   "chain": "solana",
+   "first_seen": 1792416176.798192,
+   "last_checked": 1792416176.798192,
+   "last_trending": 0,
+   "name": "Nemotron 3.5",
+   "posted_new": 0,
+   "symbol": "NEMOTRON",
    "tg": null
   },
   "solana:7FucuPwgm8WdotseyaCLBXa8di56acWX9TY2Dtz9pump": {
@@ -340,6 +384,17 @@
    "posted_new": 1,
    "symbol": "",
    "tg": null
+  },
+  "solana:HMYd9tosnUXuNHmq7pXmoePRVBLBBjA3JBfydq6upump": {
+   "address": "HMYd9tosnUXuNHmq7pXmoePRVBLBBjA3JBfydq6upump",
+   "chain": "solana",
+   "first_seen": 1792416176.798192,
+   "last_checked": 1792416176.798192,
+   "last_trending": 1792416176.798192,
+   "name": "Super Intelligence SI276",
+   "posted_new": 1,
+   "symbol": "SI276",
+   "tg": "https://t.me/si276_official"
   },
   "solana:HpHwmEZ5SYXitMQxkeyLGMeCfkazGMXGC25KJtD6pump": {
    "address": "HpHwmEZ5SYXitMQxkeyLGMeCfkazGMXGC25KJtD6pump",
