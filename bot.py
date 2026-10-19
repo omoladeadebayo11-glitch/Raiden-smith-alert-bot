@@ -1,47 +1,39 @@
 """
-Coin alert bot: watches CoinSniper and posts coins that have a Telegram group
-to a Telegram channel/group, tagged NEWLY LAUNCHED and/or TRENDING.
-
+Coin alert bot: DexScreener -> Telegram.
+Posts tokens that have a Telegram group, tagged NEWLY LAUNCHED and/or TRENDING (boosted).
 Runs ONCE per invocation (designed for GitHub Actions). State lives in data/state.json.
 """
 import html
+import json
 import logging
 import os
 import re
-import json
 import time
 
 import requests
-from bs4 import BeautifulSoup
 
-BASE = "https://coinsniper.net"
+API = "https://api.dexscreener.com"
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
-POLL_SECONDS = int(os.getenv("POLL_SECONDS", "600"))
 TRENDING_TOP = int(os.getenv("TRENDING_TOP", "10"))
-# Promoted coins appear on every page; real new coins have the highest IDs.
-NEW_ID_WINDOW = int(os.getenv("NEW_ID_WINDOW", "300"))
+NEW_MAX_AGE_HOURS = float(os.getenv("NEW_MAX_AGE_HOURS", "48"))  # token must be this young to count as new
+CHAINS = {c.strip().lower() for c in os.getenv("CHAINS", "").split(",") if c.strip()}  # empty = all
 POST_ON_FIRST_RUN = os.getenv("POST_ON_FIRST_RUN", "0") == "1"
 STATE_PATH = os.getenv("STATE_PATH", "data/state.json")
-MAX_FETCH = int(os.getenv("MAX_FETCH", "25"))  # coin pages per run
+MAX_FETCH = int(os.getenv("MAX_FETCH", "30"))  # token lookups per run
 
-RECHECK_NO_TG_HOURS = 48      # keep re-checking coins that had no Telegram yet
+RECHECK_NO_TG_HOURS = 48
 RECHECK_INTERVAL_MIN = 25
-TRENDING_COOLDOWN_HOURS = 24  # don't repeat a trending post within this time
-PAGE_DELAY = 2.0              # seconds between page requests (be polite)
+TRENDING_COOLDOWN_HOURS = 24
+API_DELAY = 0.4
+
+NEW_TAG, TREND_TAG = "🆕 NEWLY LAUNCHED", "🔥 TRENDING (boosted)"
+TG_RE = re.compile(r"^https?://(?:www\.)?(?:t|telegram)\.me/[^/\s]+", re.I)
 
 log = logging.getLogger("bot")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
 session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (compatible; CoinAlertBot/1.0)",
-    "Accept-Language": "en",
-})
-
-COIN_RE = re.compile(r"/coin/(\d+)")
-TG_RE = re.compile(r"^https?://(?:www\.)?(?:t|telegram)\.me/", re.I)
-EXPLORER_RE = re.compile(r"/(?:token|address|account)/([A-Za-z0-9_\-]{20,})")
+session.headers.update({"User-Agent": "CoinAlertBot/2.0", "Accept": "application/json"})
 
 
 # ---------- state ----------
@@ -60,101 +52,92 @@ def save_state(state):
 
 
 def new_rec(info, now, posted_new):
-    return {"name": info["name"], "symbol": info["symbol"], "tg": info["tg"],
-            "first_seen": now, "last_checked": now,
-            "posted_new": posted_new, "last_trending": 0}
+    return {"chain": info["chain"], "address": info["address"], "name": info["name"],
+            "symbol": info["symbol"], "tg": info["tg"], "first_seen": now,
+            "last_checked": now, "posted_new": posted_new, "last_trending": 0}
 
 
-# ---------- scraping ----------
-def get(url):
-    r = session.get(url, timeout=25)
+# ---------- DexScreener ----------
+def api(path):
+    r = session.get(API + path, timeout=25)
     r.raise_for_status()
-    time.sleep(PAGE_DELAY)
-    return r.text
+    time.sleep(API_DELAY)
+    data = r.json()
+    if isinstance(data, dict):
+        data = data.get("data") or data.get("pairs") or []
+    return data if isinstance(data, list) else []
 
 
-def ids_from_anchors(soup):
-    seen, out = set(), []
-    for a in soup.find_all("a", href=True):
-        m = COIN_RE.search(a["href"])
-        if m:
-            cid = int(m.group(1))
-            if cid not in seen:
-                seen.add(cid)
-                out.append(cid)
-    return out
+def telegram_from_links(links):
+    for link in links or []:
+        url = (link or {}).get("url") or ""
+        if TG_RE.match(url):
+            return url.split("?")[0]
+    return None
 
 
-def parse_new_ids(page_html):
-    ids = ids_from_anchors(BeautifulSoup(page_html, "html.parser"))
-    if not ids:
-        return []
-    top = max(ids)
-    return [i for i in ids if i >= top - NEW_ID_WINDOW]
+def pick(links, kind):
+    for link in links or []:
+        if (link.get("type") or "").lower() == kind and link.get("url"):
+            return link["url"]
+    return None
 
 
-def parse_trending_ids(page_html, limit):
-    """Rank order from the first coin link in each table row."""
-    soup = BeautifulSoup(page_html, "html.parser")
-    out = []
-    for tr in soup.select("table tr"):
-        a = tr.find("a", href=COIN_RE)
-        if a:
-            cid = int(COIN_RE.search(a["href"]).group(1))
-            if cid not in out:
-                out.append(cid)
-        if len(out) >= limit:
-            break
-    return out
-
-
-def search(pattern, text):
-    m = re.search(pattern, text, re.S | re.I)
-    return m.group(1).strip() if m else None
-
-
-def parse_coin(coin_id, page_html):
-    soup = BeautifulSoup(page_html, "html.parser")
-    title = soup.title.get_text(strip=True) if soup.title else ""
-    m = re.match(r"^(.*?)\s*\((.*?)\)\s*Price", title)
-    name = m.group(1) if m else (soup.h1.get_text(strip=True) if soup.h1 else f"Coin {coin_id}")
-    symbol = m.group(2) if m else ""
-
-    tg = x = site = contract = chain = None
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        low = href.lower()
-        if not tg and TG_RE.match(href) and "coinsnipernet" not in low:
-            tg = href.split("?")[0]
-        elif not x and re.match(r"^https?://(?:www\.)?(?:x|twitter)\.com/", low) and "coinsniper_net" not in low:
-            x = href
-        elif not site and a.get_text(strip=True).lower() in ("website", "visit website") and "coinsniper.net" not in low:
-            site = href
-        elif not contract and ("scan" in low or "explorer" in low):
-            mm = EXPLORER_RE.search(href)
-            if mm:
-                contract = mm.group(1)
-        elif not chain and "/chain/" in low:
-            chain = a.get_text(strip=True) or None
-
-    text = soup.get_text("\n", strip=True)
-    flat = " ".join(text.split())
-    info = {
-        "id": coin_id, "name": name, "symbol": symbol, "tg": tg, "x": x,
-        "site": site, "contract": contract, "chain": chain,
-        "price": search(r"\bPrice\s*(\$[\d.,]+)", flat),
-        "mcap": search(r"Market Cap\s*(\$[\d.,]+\w?)", flat),
-        "holders": search(r"HOLDER COUNT.*?is\s*(\d[\d,]*\d|\d)", flat),
-        "top10": search(r"TOP 10 HOLDER %.*?([\d.]+)%", flat),
-    }
+def fetch_token(chain, address, seed_links=None):
+    """Market data + socials for one token. Returns dict or None on failure."""
+    try:
+        pairs = api(f"/tokens/v1/{chain}/{address}")
+    except Exception as exc:
+        log.warning("lookup %s/%s failed: %s", chain, address, exc)
+        return None
+    best = max(pairs, key=lambda p: ((p.get("liquidity") or {}).get("usd") or 0), default=None)
+    info = {"key": f"{chain}:{address}", "chain": chain, "address": address,
+            "name": "", "symbol": "", "tg": telegram_from_links(seed_links),
+            "x": pick(seed_links, "twitter"), "site": None, "price": None, "mcap": None,
+            "liq": None, "vol24": None, "age_h": None,
+            "url": f"https://dexscreener.com/{chain}/{address}"}
+    if best:
+        base = best.get("baseToken") or {}
+        info["name"], info["symbol"] = base.get("name", ""), base.get("symbol", "")
+        info["price"] = best.get("priceUsd")
+        info["mcap"] = best.get("marketCap") or best.get("fdv")
+        info["liq"] = (best.get("liquidity") or {}).get("usd")
+        info["vol24"] = (best.get("volume") or {}).get("h24")
+        info["url"] = best.get("url") or info["url"]
+        created = best.get("pairCreatedAt")
+        if created:
+            info["age_h"] = max(0.0, (time.time() * 1000 - created) / 3_600_000)
+        pinfo = best.get("info") or {}
+        socials = pinfo.get("socials") or []
+        info["tg"] = info["tg"] or telegram_from_links(socials)
+        info["x"] = info["x"] or pick(socials, "twitter")
+        sites = pinfo.get("websites") or []
+        info["site"] = sites[0].get("url") if sites else None
     return info
 
 
-def fetch_coin(coin_id):
-    return parse_coin(coin_id, get(f"{BASE}/coin/{coin_id}"))
-
-
 # ---------- telegram ----------
+def money(v):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    for lim, suf in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if v >= lim:
+            return f"${v / lim:.2f}{suf}"
+    return f"${v:,.0f}"
+
+
+def age_text(h):
+    if h is None:
+        return None
+    if h < 1:
+        return f"{int(h * 60)}m"
+    if h < 48:
+        return f"{h:.0f}h"
+    return f"{h / 24:.0f}d"
+
+
 def send(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML",
@@ -174,43 +157,35 @@ def send(text):
 
 def build_message(info, tags):
     e = html.escape
-    header = " + ".join(tags)
     sym = f" (${e(info['symbol'])})" if info["symbol"] else ""
-    lines = [f"<b>{header}</b>", f"<b>{e(info['name'])}</b>{sym}"]
-    if info["chain"]:
-        lines.append(f"Chain: {e(info['chain'])}")
+    lines = [f"<b>{' + '.join(tags)}</b>", f"<b>{e(info['name'] or info['address'][:8])}</b>{sym}"]
+    bits = [f"Chain: {e(info['chain'])}"]
+    if age_text(info["age_h"]):
+        bits.append(f"Age: {age_text(info['age_h'])}")
+    lines.append(" | ".join(bits))
+    stats = []
     if info["price"]:
-        lines.append(f"Price: {e(info['price'])}" + (f" | MCap: {e(info['mcap'])}" if info["mcap"] else ""))
-    if info["contract"]:
-        lines.append(f"CA: <code>{e(info['contract'])}</code>")
+        stats.append(f"Price: ${e(str(info['price']))}")
+    for label, val in (("MCap", info["mcap"]), ("Liq", info["liq"]), ("Vol24h", info["vol24"])):
+        if money(val):
+            stats.append(f"{label}: {money(val)}")
+    if stats:
+        lines.append(" | ".join(stats))
+    lines.append(f"CA: <code>{e(info['address'])}</code>")
     links = [f'<a href="{e(info["tg"])}">Telegram</a>']
     if info["x"]:
         links.append(f'<a href="{e(info["x"])}">X</a>')
     if info["site"]:
         links.append(f'<a href="{e(info["site"])}">Website</a>')
-    links.append(f'<a href="{BASE}/coin/{info["id"]}">CoinSniper</a>')
+    links.append(f'<a href="{e(info["url"])}">DexScreener</a>')
     lines.append(" | ".join(links))
-    if info["holders"] or info["top10"]:
-        bits = []
-        if info["holders"]:
-            bits.append(f"holders: {e(info['holders'])}")
-        if info["top10"]:
-            bits.append(f"top-10 hold: {e(info['top10'])}%")
-        lines.append("Scan: " + ", ".join(bits))
-    lines.append("<i>Not financial advice. DYOR. Listings and rankings can be paid or vote-driven.</i>")
+    lines.append("<i>Not financial advice. DYOR. 'Boosted' means paid promotion, not organic trending.</i>")
     return "\n".join(lines)
 
 
 # ---------- main logic ----------
-NEW_TAG, TREND_TAG = "🆕 NEWLY LAUNCHED", "🔥 TRENDING"
-
-
-def safe_fetch(coin_id):
-    try:
-        return fetch_coin(coin_id)
-    except Exception as exc:
-        log.warning("fetch %s failed: %s", coin_id, exc)
-        return None
+def chain_ok(chain):
+    return not CHAINS or chain.lower() in CHAINS
 
 
 def run_once(state):
@@ -218,66 +193,74 @@ def run_once(state):
     coins = state["coins"]
     first_run = not state.get("initialized")
     try:
-        new_ids = parse_new_ids(get(f"{BASE}/new"))
-        trend_ids = parse_trending_ids(get(f"{BASE}/today"), TRENDING_TOP)
+        profiles = [p for p in api("/token-profiles/latest/v1") if chain_ok(p.get("chainId", ""))]
+        boosts = [b for b in api("/token-boosts/top/v1") if chain_ok(b.get("chainId", ""))][:TRENDING_TOP]
     except Exception as exc:
-        log.error("list pages failed: %s", exc)
+        log.error("DexScreener list request failed: %s", exc)
         return False
-    log.info("new=%d trending=%d known=%d", len(new_ids), len(trend_ids), len(coins))
-    if not new_ids:
-        log.error("no coins parsed from /new - layout may have changed")
+    log.info("profiles=%d boosted=%d known=%d", len(profiles), len(boosts), len(coins))
+    if not profiles and not boosts:
+        log.error("nothing returned - API may have changed")
         return False
 
     fetches = [0]
 
-    def fetch(cid):
+    def lookup(chain, addr, links=None):
         if fetches[0] >= MAX_FETCH:
             return None
         fetches[0] += 1
-        return safe_fetch(cid)
+        return fetch_token(chain, addr, links)
 
     seed_only = first_run and not POST_ON_FIRST_RUN
-    pending = {}  # key -> {"tags": set, "info": dict}
+    pending = {}
 
-    # 1) brand-new coins
-    for cid in new_ids:
-        key = str(cid)
+    # 1) newly listed profiles
+    for p in profiles:
+        chain, addr = p.get("chainId"), p.get("tokenAddress")
+        if not chain or not addr:
+            continue
+        key = f"{chain}:{addr}"
         if key in coins:
             continue
         if seed_only:
-            coins[key] = {"name": "", "symbol": "", "tg": None, "first_seen": now,
-                          "last_checked": now, "posted_new": 1, "last_trending": 0}
+            coins[key] = {"chain": chain, "address": addr, "name": "", "symbol": "", "tg": None,
+                          "first_seen": now, "last_checked": now, "posted_new": 1, "last_trending": 0}
             continue
-        info = fetch(cid)
+        info = lookup(chain, addr, p.get("links"))
         if not info:
-            continue  # not stored, so it is retried next run
-        if info["tg"]:
+            continue  # not stored -> retried next run
+        if info["age_h"] is None or info["age_h"] > NEW_MAX_AGE_HOURS:
+            coins[key] = new_rec(info, now, 1)  # old token, never announce as new
+        elif info["tg"]:
             pending[key] = {"tags": {NEW_TAG}, "info": info}
         else:
             coins[key] = new_rec(info, now, 0)
 
-    # 2) coins that had no Telegram yet: re-check for a while
+    # 2) young tokens with no Telegram yet: re-check for a while
     for key, c in list(coins.items()):
-        if c["tg"] or c["posted_new"]:
+        if c.get("tg") or c.get("posted_new") or "chain" not in c:
             continue
         if c["first_seen"] < now - RECHECK_NO_TG_HOURS * 3600:
             continue
         if c["last_checked"] > now - RECHECK_INTERVAL_MIN * 60:
             continue
-        info = fetch(int(key))
+        info = lookup(c["chain"], c["address"])
         if not info:
             continue
         c["last_checked"] = now
         if info["tg"]:
             pending.setdefault(key, {"tags": set(), "info": info})["tags"].add(NEW_TAG)
 
-    # 3) trending
-    for cid in trend_ids:
-        key = str(cid)
-        c = coins.get(key)
-        if c and now - c["last_trending"] < TRENDING_COOLDOWN_HOURS * 3600:
+    # 3) trending (boosted)
+    for b in boosts:
+        chain, addr = b.get("chainId"), b.get("tokenAddress")
+        if not chain or not addr:
             continue
-        info = pending[key]["info"] if key in pending else fetch(cid)
+        key = f"{chain}:{addr}"
+        c = coins.get(key)
+        if c and now - c.get("last_trending", 0) < TRENDING_COOLDOWN_HOURS * 3600:
+            continue
+        info = pending[key]["info"] if key in pending else lookup(chain, addr, b.get("links"))
         if not info or not info["tg"]:
             continue
         pending.setdefault(key, {"tags": set(), "info": info})["tags"].add(TREND_TAG)
@@ -286,18 +269,15 @@ def run_once(state):
     for key, p in pending.items():
         tags = [t for t in (NEW_TAG, TREND_TAG) if t in p["tags"]]
         if not send(build_message(p["info"], tags)):
-            continue  # not recorded -> retried next run
-        c = coins.setdefault(key, new_rec(p["info"], now, 0))
-        c["tg"], c["name"], c["symbol"] = p["info"]["tg"], p["info"]["name"], p["info"]["symbol"]
-        if NEW_TAG in tags:
-            c["posted_new"] = 1
-        else:
-            c["posted_new"] = c["posted_new"] or 1
+            continue
+        info = p["info"]
+        c = coins.setdefault(key, new_rec(info, now, 0))
+        c["tg"], c["name"], c["symbol"] = info["tg"], info["name"], info["symbol"]
+        c["posted_new"] = 1
         if TREND_TAG in tags:
             c["last_trending"] = now
         log.info("posted %s %s", key, tags)
 
-    # prune very old entries to keep the file small
     for key in [k for k, c in coins.items() if c["first_seen"] < now - 30 * 86400]:
         del coins[key]
     state["initialized"] = True
