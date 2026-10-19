@@ -209,6 +209,17 @@
    "symbol": "",
    "tg": null
   },
+  "solana:8Vb5f7enGjp2uHuRqh1F5AVoXoXrYVZHwuw2orjepump": {
+   "address": "8Vb5f7enGjp2uHuRqh1F5AVoXoXrYVZHwuw2orjepump",
+   "chain": "solana",
+   "first_seen": 1792415771.4188561,
+   "last_checked": 1792415771.4188561,
+   "last_trending": 0,
+   "name": "\u5263\u3092\u6301\u3063\u305f\u72ac",
+   "posted_new": 0,
+   "symbol": "Monaka",
+   "tg": null
+  },
   "solana:8dxJpPDmw6UEsfHVQuTEy4kfcEJKV15cF89fVKBEpump": {
    "address": "8dxJpPDmw6UEsfHVQuTEy4kfcEJKV15cF89fVKBEpump",
    "chain": "solana",
@@ -218,6 +229,28 @@
    "name": "",
    "posted_new": 1,
    "symbol": "",
+   "tg": null
+  },
+  "solana:8y4bf1KnXxL2FavUpXHYESv75QkYLKQuqnNJ8xxbpump": {
+   "address": "8y4bf1KnXxL2FavUpXHYESv75QkYLKQuqnNJ8xxbpump",
+   "chain": "solana",
+   "first_seen": 1792415771.4188561,
+   "last_checked": 1792415771.4188561,
+   "last_trending": 0,
+   "name": "Halloween 2026",
+   "posted_new": 0,
+   "symbol": "Halloween",
+   "tg": null
+  },
+  "solana:9hWsUj7Q5JUjHKqeuiGPA3GExm26ETqeSPKTSP2Qpump": {
+   "address": "9hWsUj7Q5JUjHKqeuiGPA3GExm26ETqeSPKTSP2Qpump",
+   "chain": "solana",
+   "first_seen": 1792415771.4188561,
+   "last_checked": 1792415771.4188561,
+   "last_trending": 0,
+   "name": "Rip Kim Jong-Un",
+   "posted_new": 0,
+   "symbol": "\uae40\uc815\uc740",
    "tg": null
   },
   "solana:C6vwk8YUcpw7un4V8dVagi4FpaRY1zSB5cZJvGVwpump": {
