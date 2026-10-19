@@ -242,6 +242,17 @@
    "symbol": "",
    "tg": null
   },
+  "solana:8Lt2h83EV5g1qNsTKHfBEZEGMkFZ28cMC97TUC1Ypump": {
+   "address": "8Lt2h83EV5g1qNsTKHfBEZEGMkFZ28cMC97TUC1Ypump",
+   "chain": "solana",
+   "first_seen": 1792416796.109051,
+   "last_checked": 1792416796.109051,
+   "last_trending": 0,
+   "name": "Eternal Star We Hope So",
+   "posted_new": 0,
+   "symbol": "Star",
+   "tg": null
+  },
   "solana:8SjTB8B6r9Vz4oVqWQ5jr6AggZCkWaPT1yZe3yaJpump": {
    "address": "8SjTB8B6r9Vz4oVqWQ5jr6AggZCkWaPT1yZe3yaJpump",
    "chain": "solana",
@@ -416,6 +427,17 @@
    "name": "",
    "posted_new": 1,
    "symbol": "",
+   "tg": null
+  },
+  "solana:nDW9BXkBLZobxLJs72cHdjgFVZoQFP6n1naBF1Cpump": {
+   "address": "nDW9BXkBLZobxLJs72cHdjgFVZoQFP6n1naBF1Cpump",
+   "chain": "solana",
+   "first_seen": 1792416796.109051,
+   "last_checked": 1792416796.109051,
+   "last_trending": 0,
+   "name": "Awesome AI Engineering ",
+   "posted_new": 0,
+   "symbol": "A-2-Z",
    "tg": null
   }
  },
