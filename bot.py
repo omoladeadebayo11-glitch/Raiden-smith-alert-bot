@@ -18,8 +18,10 @@ import requests
 
 DEX = "https://api.dexscreener.com"
 GT = "https://api.geckoterminal.com/api/v2"
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHAT_ID = os.environ["CHAT_ID"]
+BOT_TOKEN = os.environ["BOT_TOKEN"].strip().strip('"\'')
+if BOT_TOKEN.lower().startswith("bot"):
+    BOT_TOKEN = BOT_TOKEN[3:]
+CHAT_ID = os.environ["CHAT_ID"].strip().strip('"\'')
 TRENDING_TOP = int(os.getenv("TRENDING_TOP", "10"))
 GT_NEW_PAGES = int(os.getenv("GT_NEW_PAGES", "3"))            # 20 new pools per page
 NEW_MAX_AGE_HOURS = float(os.getenv("NEW_MAX_AGE_HOURS", "48"))
@@ -29,6 +31,8 @@ MAX_LOOKUPS = int(os.getenv("MAX_LOOKUPS", "300"))
 CHAINS = {c.strip().lower() for c in os.getenv("CHAINS", "").split(",") if c.strip()}  # empty = all
 POST_ON_FIRST_RUN = os.getenv("POST_ON_FIRST_RUN", "0") == "1"
 STATE_PATH = os.getenv("STATE_PATH", "data/state.json")
+CCL_ENABLED = os.getenv("CCL_ENABLED", "1") == "1"   # cryptocoinlister.com listings
+CCL = "https://cryptocoinlister.com"
 RUN_MINUTES = float(os.getenv("RUN_MINUTES", "0"))        # 0 = single check, then exit
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "180"))  # pause between checks
 
@@ -37,7 +41,8 @@ RECHECK_INTERVAL_MIN = 10
 COOLDOWN_HOURS = 24
 DEX_DELAY, GT_DELAY = 0.3, 2.2   # GeckoTerminal free tier: 30 calls/min
 
-NEW_TAG, TREND_TAG, BOOST_TAG = "🆕 NEWLY LAUNCHED", "🔥 TRENDING", "🚀 BOOSTED"
+NEW_TAG, TREND_TAG, BOOST_TAG, VOTE_TAG = "🆕 NEWLY LAUNCHED", "🔥 TRENDING", "🚀 BOOSTED", "🗳 TOP VOTED"
+ALL_TAGS = (NEW_TAG, TREND_TAG, BOOST_TAG, VOTE_TAG)
 TG_RE = re.compile(r"^https?://(?:www\.)?(?:t|telegram)\.me/[^/\s]+", re.I)
 GT_CHAIN = {"eth": "ethereum", "polygon_pos": "polygon", "avax": "avalanche",
             "sui-network": "sui", "bsc": "bsc"}
@@ -128,6 +133,30 @@ def gt_pools(path, params=None):
         if chain_ok(chain):
             out.append((chain, addr, age))
     return out
+
+
+CCL_TOKEN_RE = re.compile(r"/token/([a-z0-9\-]+)/([A-Za-z0-9]{20,})", re.I)
+CCL_CHAIN = {"matic": "polygon", "eth": "ethereum", "bnb": "bsc", "avax": "avalanche"}
+
+
+def scrape_ccl(path):
+    """CryptoCoin Lister puts chain + contract in each token link: /token/<chain>/<address>."""
+    try:
+        r = session.get(CCL + path, timeout=25)
+        r.raise_for_status()
+        time.sleep(1)
+    except Exception as exc:
+        log.warning("cryptocoinlister %s failed: %s", path, exc)
+        return []
+    out, seen = [], set()
+    for chain, addr in CCL_TOKEN_RE.findall(r.text):
+        chain = CCL_CHAIN.get(chain.lower(), chain.lower())
+        key = (chain, norm(addr))
+        if key not in seen and chain_ok(chain):
+            seen.add(key)
+            out.append((chain, addr))
+    return out
+
 
 
 def telegram_from_links(links):
@@ -249,6 +278,8 @@ def build_message(info, tags):
     note = "⚠️ DYOR · Not financial advice"
     if BOOST_TAG in tags:
         note += " · Boosted = paid promotion"
+    elif VOTE_TAG in tags:
+        note += " · Votes can be campaign-driven"
     lines.append(f"<i>{note}</i>")
     return "\n".join(lines)
 
@@ -261,7 +292,7 @@ def run_once(state):
     seed_only = first_run and not POST_ON_FIRST_RUN
 
     # --- collect from all sources (each fails independently) ---
-    new_src, trend_src, boost_src = {}, {}, {}   # key -> {chain, addr, links, age}
+    new_src, trend_src, boost_src, vote_src = {}, {}, {}, {}   # key -> {chain, addr, links, age}
 
     def add(bucket, chain, addr, links=None, age=None):
         if chain and addr and chain_ok(chain):
@@ -280,8 +311,14 @@ def run_once(state):
             add(boost_src, b.get("chainId"), b.get("tokenAddress"), b.get("links"))
     except Exception as exc:
         log.warning("DexScreener lists failed: %s", exc)
-    log.info("new=%d trending=%d boosted=%d known=%d", len(new_src), len(trend_src), len(boost_src), len(coins))
-    if not (new_src or trend_src or boost_src):
+    if CCL_ENABLED:
+        for chain, addr in scrape_ccl("/search?query=newest"):
+            add(new_src, chain, addr)
+        for chain, addr in scrape_ccl("/")[:TRENDING_TOP]:
+            add(vote_src, chain, addr)
+    log.info("new=%d trending=%d boosted=%d voted=%d known=%d", len(new_src), len(trend_src),
+             len(boost_src), len(vote_src), len(coins))
+    if not (new_src or trend_src or boost_src or vote_src):
         log.error("no data from any source")
         return False
 
@@ -302,7 +339,7 @@ def run_once(state):
                 and c["last_checked"] < now - RECHECK_INTERVAL_MIN * 60):
             chain, addr = key.split(":", 1)
             want.setdefault(key, {"chain": chain, "addr": addr, "links": None, "age": None})
-    for bucket in (trend_src, boost_src):
+    for bucket in (trend_src, boost_src, vote_src):
         for key, c in bucket.items():
             rec = coins.get(key)
             if not rec or now - rec.get("last_trending", 0) >= COOLDOWN_HOURS * 3600:
@@ -341,6 +378,9 @@ def run_once(state):
     for key in boost_src:
         if key in infos:
             queue(key, BOOST_TAG)
+    for key in vote_src:
+        if key in infos:
+            queue(key, VOTE_TAG)
 
     # --- send, then record ---
     sent = 0
@@ -348,13 +388,13 @@ def run_once(state):
         if sent >= MAX_POSTS_PER_RUN:
             log.info("post cap reached; rest retried next run")
             break
-        tags = [t for t in (NEW_TAG, TREND_TAG, BOOST_TAG) if t in p["tags"]]
+        tags = [t for t in ALL_TAGS if t in p["tags"]]
         if not send(build_message(p["info"], tags)):
             continue
         sent += 1
         c = coins.setdefault(key, new_rec(p["info"], now, 0))
         c["tg"], c["posted_new"] = p["info"]["tg"], 1
-        if TREND_TAG in tags or BOOST_TAG in tags:
+        if set(tags) & {TREND_TAG, BOOST_TAG, VOTE_TAG}:
             c["last_trending"] = int(now)
         log.info("posted %s %s", key, tags)
 
