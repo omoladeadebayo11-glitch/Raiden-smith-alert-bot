@@ -29,9 +29,11 @@ MAX_LOOKUPS = int(os.getenv("MAX_LOOKUPS", "300"))
 CHAINS = {c.strip().lower() for c in os.getenv("CHAINS", "").split(",") if c.strip()}  # empty = all
 POST_ON_FIRST_RUN = os.getenv("POST_ON_FIRST_RUN", "0") == "1"
 STATE_PATH = os.getenv("STATE_PATH", "data/state.json")
+RUN_MINUTES = float(os.getenv("RUN_MINUTES", "0"))        # 0 = single check, then exit
+INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "180"))  # pause between checks
 
 RECHECK_NO_TG_HOURS = 24
-RECHECK_INTERVAL_MIN = 25
+RECHECK_INTERVAL_MIN = 10
 COOLDOWN_HOURS = 24
 DEX_DELAY, GT_DELAY = 0.3, 2.2   # GeckoTerminal free tier: 30 calls/min
 
@@ -306,7 +308,7 @@ def run_once(state):
             if not rec or now - rec.get("last_trending", 0) >= COOLDOWN_HOURS * 3600:
                 want.setdefault(key, c)
     infos = lookup_many(want)
-    log.info("looked up %d tokens", len(infos))
+    log.info("looked up %d tokens, %d have a Telegram link", len(infos), sum(1 for i in infos.values() if i["tg"]))
 
     # --- build posts ---
     pending = {}
@@ -365,11 +367,16 @@ def run_once(state):
 
 def main():
     state = load_state() or {"coins": {}, "initialized": False}
-    try:
-        run_once(state)
-    except Exception:
-        log.exception("run failed")  # still save what was already posted, so nothing is reposted
-    save_state(state)
+    end = time.time() + RUN_MINUTES * 60
+    while True:
+        try:
+            run_once(state)
+        except Exception:
+            log.exception("check failed")  # keep going; what was posted is still saved
+        save_state(state)
+        if time.time() + INTERVAL_SECONDS >= end:
+            break
+        time.sleep(INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":
