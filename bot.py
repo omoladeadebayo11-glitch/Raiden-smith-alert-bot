@@ -23,7 +23,7 @@ if BOT_TOKEN.lower().startswith("bot"):
     BOT_TOKEN = BOT_TOKEN[3:]
 CHAT_ID = os.environ["CHAT_ID"].strip().strip('"\'')
 TRENDING_TOP = int(os.getenv("TRENDING_TOP", "10"))
-GT_NEW_PAGES = int(os.getenv("GT_NEW_PAGES", "3"))            # 20 new pools per page
+GT_NEW_PAGES = int(os.getenv("GT_NEW_PAGES", "5"))            # 20 new pools per page
 NEW_MAX_AGE_HOURS = float(os.getenv("NEW_MAX_AGE_HOURS", "48"))
 MIN_LIQUIDITY_USD = float(os.getenv("MIN_LIQUIDITY_USD", "0"))
 MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "15"))
@@ -161,7 +161,10 @@ def scrape_ccl(path):
 
 def telegram_from_links(links):
     for link in links or []:
-        url = (link or {}).get("url") or ""
+        link = link or {}
+        url = link.get("url") or ""
+        if not url and (link.get("platform") or "").lower() == "telegram" and link.get("handle"):
+            url = "https://t.me/" + str(link["handle"]).lstrip("@/")
         if TG_RE.match(url):
             return url.split("?")[0]
     return None
@@ -295,9 +298,14 @@ def run_once(state):
     new_src, trend_src, boost_src, vote_src = {}, {}, {}, {}   # key -> {chain, addr, links, age}
 
     def add(bucket, chain, addr, links=None, age=None):
-        if chain and addr and chain_ok(chain):
-            bucket.setdefault(mk(chain, addr), {"chain": chain, "addr": norm(addr),
-                                                "links": links, "age": age})
+        if not (chain and addr and chain_ok(chain)):
+            return
+        key = mk(chain, addr)
+        cur = bucket.get(key)
+        if cur is None:
+            bucket[key] = {"chain": chain, "addr": norm(addr), "links": links, "age": age}
+        elif links and not cur["links"]:
+            cur["links"] = links
 
     for page in range(1, GT_NEW_PAGES + 1):
         for chain, addr, age in gt_pools("/networks/new_pools", {"page": page}):
@@ -311,6 +319,15 @@ def run_once(state):
             add(boost_src, b.get("chainId"), b.get("tokenAddress"), b.get("links"))
     except Exception as exc:
         log.warning("DexScreener lists failed: %s", exc)
+    for path in ("/token-profiles/recent-updates/v1",   # tokens that just added/changed socials
+                 "/community-takeovers/latest/v1",
+                 "/token-boosts/latest/v1",
+                 "/ads/latest/v1"):
+        try:
+            for p in dex_get(path):
+                add(new_src, p.get("chainId"), p.get("tokenAddress"), p.get("links"))
+        except Exception as exc:
+            log.warning("DexScreener %s failed: %s", path, exc)
     if CCL_ENABLED:
         for chain, addr in scrape_ccl("/search?query=newest"):
             add(new_src, chain, addr)
