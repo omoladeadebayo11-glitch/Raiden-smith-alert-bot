@@ -33,6 +33,14 @@ POST_ON_FIRST_RUN = os.getenv("POST_ON_FIRST_RUN", "0") == "1"
 STATE_PATH = os.getenv("STATE_PATH", "data/state.json")
 CCL_ENABLED = os.getenv("CCL_ENABLED", "1") == "1"   # cryptocoinlister.com listings
 CCL = "https://cryptocoinlister.com"
+BINANCE_ENABLED = os.getenv("BINANCE_ENABLED", "1") == "1"   # Binance Meme Rush: launchpad tokens
+BINANCE_RANKS = [int(x) for x in os.getenv("BINANCE_RANKS", "10").split(",") if x.strip()]  # 10=New 20=Finalizing
+BN_BASE = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/pulse/rank/list"
+BN_URLS = [BN_BASE + "/ai", BN_BASE]
+BN_HEADERS = {"Content-Type": "application/json", "Accept-Encoding": "identity",
+              "User-Agent": "binance-web3/1.1 (Skill)"}
+BN_CHAINS = {"CT_501": "solana", "56": "bsc", "8453": "base"}
+BN_PROTOCOLS = {1001: "Pump.fun", 1002: "Moonit", 2001: "Four.meme", 2002: "Flap", 2004: "Open Four"}
 RUN_MINUTES = float(os.getenv("RUN_MINUTES", "0"))        # 0 = single check, then exit
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "180"))  # pause between checks
 
@@ -159,6 +167,59 @@ def scrape_ccl(path):
 
 
 
+def num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def binance_tokens(chain_id, rank_type):
+    """Launchpad tokens from Binance Meme Rush. Tries the Telegram-filtered request first."""
+    bodies = [
+        {"chainId": chain_id, "rankType": rank_type, "limit": 100,
+         "tokenSocials": {"atLeastOne": 1, "socials": ["telegram"]}},
+        {"chainId": chain_id, "rankType": rank_type, "limit": 100},
+    ]
+    last = None
+    for url in BN_URLS:
+        for body in bodies:
+            try:
+                r = session.post(url, json=body, headers=BN_HEADERS, timeout=25)
+                r.raise_for_status()
+                time.sleep(1)
+                data = r.json().get("data") or {}
+                tokens = data.get("tokens") if isinstance(data, dict) else data
+                if isinstance(tokens, list):
+                    if tokens:
+                        log.info("binance %s sample fields: %s", chain_id, sorted(tokens[0].keys())[:40])
+                    return tokens
+            except Exception as exc:
+                last = exc
+    log.warning("Binance Meme Rush %s failed: %s", chain_id, last)
+    return []
+
+
+def binance_info(chain, t):
+    addr = t.get("contractAddress")
+    tg = telegram_from_links([{"url": ((t.get("socials") or {}).get("telegram") or "")}])
+    created = num(t.get("createTime"))
+    if not addr or not tg or not created:
+        return None
+    try:
+        proto = int(t.get("protocol"))
+    except (TypeError, ValueError):
+        proto = None
+    launchpad = BN_PROTOCOLS.get(proto) or {1: "Solana launchpad", 2: "BSC launchpad",
+                                            3: "Base launchpad"}.get((proto or 0) // 1000)
+    return {"chain": chain, "address": addr, "name": t.get("name") or t.get("tokenName") or "",
+            "symbol": t.get("symbol") or "", "tg": tg, "mcap": num(t.get("marketCap")),
+            "liq": num(t.get("liquidity")), "vol24": None,
+            "age_h": max(0.0, (time.time() * 1000 - created) / 3_600_000),
+            "launchpad": launchpad, "holders": t.get("holders"), "progress": t.get("progress")}
+
+
+
 def telegram_from_links(links):
     for link in links or []:
         link = link or {}
@@ -271,11 +332,17 @@ def build_message(info, tags):
     meta = f"⛓ {e(chain)}"
     if age_text(info["age_h"]):
         meta += f"   ⏱ {age_text(info['age_h'])} old"
+    if info.get("launchpad"):
+        meta += f"   🚀 {e(info['launchpad'])}"
     lines = ["  ".join(f"<b>{t}</b>" for t in tags), "", f"<b>{name}</b>{sym}", meta, ""]
     for icon, label, val in (("💰", "MCap", info["mcap"]), ("💧", "Liquidity", info["liq"]),
                              ("📊", "Volume 24h", info["vol24"])):
         if money(val):
             lines.append(f"{icon} {label}: <b>{money(val)}</b>")
+    if info.get("holders"):
+        lines.append(f"👥 Holders: <b>{e(str(info['holders']))}</b>")
+    if info.get("progress"):
+        lines.append(f"📈 Bonding curve: <b>{e(str(info['progress']))}%</b>")
     lines += ["", "📋 <b>Contract</b>", f"<code>{e(info['address'])}</code>", "",
               f'💬 <a href="{e(info["tg"])}">Join Telegram group</a>', ""]
     note = "⚠️ DYOR · Not financial advice"
@@ -333,16 +400,26 @@ def run_once(state):
             add(new_src, chain, addr)
         for chain, addr in scrape_ccl("/")[:TRENDING_TOP]:
             add(vote_src, chain, addr)
-    log.info("new=%d trending=%d boosted=%d voted=%d known=%d", len(new_src), len(trend_src),
-             len(boost_src), len(vote_src), len(coins))
-    if not (new_src or trend_src or boost_src or vote_src):
+    bn_src = {}   # key -> prebuilt info (launchpad tokens, mostly not on a DEX yet)
+    if BINANCE_ENABLED:
+        for chain_id, chain in BN_CHAINS.items():
+            if not chain_ok(chain):
+                continue
+            for rank in BINANCE_RANKS:
+                for t in binance_tokens(chain_id, rank):
+                    info = binance_info(chain, t)
+                    if info:
+                        bn_src.setdefault(mk(chain, info["address"]), info)
+    log.info("new=%d trending=%d boosted=%d voted=%d launchpad_tg=%d known=%d", len(new_src), len(trend_src),
+             len(boost_src), len(vote_src), len(bn_src), len(coins))
+    if not (new_src or trend_src or boost_src or vote_src or bn_src):
         log.error("no data from any source")
         return False
 
     # --- decide which tokens to look up ---
     want = {}
     if seed_only:
-        for key in new_src:
+        for key in list(new_src) + list(bn_src):
             if key not in coins:
                 coins[key] = {"tg": None, "first_seen": int(now), "last_checked": int(now),
                               "posted_new": 1, "last_trending": 0}
@@ -389,6 +466,16 @@ def run_once(state):
         if key in infos and not c.get("tg") and not c.get("posted_new"):
             c["last_checked"] = int(now)
             queue(key, NEW_TAG)
+    if not seed_only:
+        for key, info in bn_src.items():
+            c = coins.get(key)
+            if (c and (c.get("posted_new") or c.get("tg"))) or key in pending:
+                continue
+            if info["age_h"] > NEW_MAX_AGE_HOURS:
+                continue
+            if MIN_LIQUIDITY_USD and info["liq"] is not None and info["liq"] < MIN_LIQUIDITY_USD:
+                continue
+            pending[key] = {"tags": {NEW_TAG}, "info": info}
     for key in trend_src:
         if key in infos:
             queue(key, TREND_TAG)
